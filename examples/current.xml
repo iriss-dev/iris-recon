@@ -1,0 +1,6 @@
+<?xml version="1.0"?><!DOCTYPE nmaprun><nmaprun scanner="nmap" version="example" args="synthetic fixture - no scan executed" startstr="Synthetic example">
+<scaninfo type="connect" protocol="tcp" services="22,80,443"/>
+<host><status state="up"/><address addr="192.0.2.10" addrtype="ipv4"/><hostnames><hostname name="lab.example"/></hostnames><ports>
+<port protocol="tcp" portid="80"><state state="open" reason="syn-ack"/><service name="http" product="Example HTTP" version="1.0" method="probed" conf="10"/></port>
+<port protocol="tcp" portid="443"><state state="open" reason="syn-ack"/><service name="https" product="Example Web" version="1.0" method="probed" conf="10"/></port>
+</ports></host><runstats><finished exit="success" elapsed="0"/></runstats></nmaprun>
