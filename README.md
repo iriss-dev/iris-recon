@@ -1,65 +1,142 @@
 # Iris Recon
 
-An Nmap companion for repeatable network assessments: preserve evidence, create readable HTML reports, export structured JSON, and compare observations between runs.
+[![Tests](https://github.com/iriss-dev/iris-recon/actions/workflows/ci.yml/badge.svg)](https://github.com/iriss-dev/iris-recon/actions/workflows/ci.yml)
 
-**Status: initial working version.** This project adds reporting and workflow features around Nmap. It does not claim to outperform Nmap's scanning engine or automatically confirm vulnerabilities.
+Network, web and SQL assessment tools. Run a check, inspect the evidence, and compare it with the next assessment.
 
-## Requirements
+Nmap handles network scanning. Iris Recon adds reports, SQL source review, read-only SQLite inspection, HTTP checks and local credential tracking.
 
-- Python 3.11+; no third-party Python packages.
-- Nmap installed separately and available on `PATH` for `scan`. Offline `report` does not require Nmap.
+## Install
 
-Nmap is a separate project with its own license. It is not bundled here. See [Nmap downloads](https://nmap.org/download.html) and its [license](https://nmap.org/npsl/).
-
-## Quick start
-
-Analyze the included **synthetic** example without network activity:
+Requires Python 3.11+. A virtual environment is recommended.
 
 ```console
-python iris_recon.py report examples/baseline.xml --out demo
+git clone https://github.com/iriss-dev/iris-recon.git
+cd iris-recon
+python -m pip install -e .
+python iris_recon.py doctor
 ```
 
-Open `demo/report.html` in your browser. The `demo/report.json` file retains host states, explicit port states, service attributes, CPE identifiers, script output attributes, summarized extra-port states, and source provenance.
+The package also installs an `iris-recon` command. [Nmap](https://nmap.org/download.html) is required only for `scan`, is installed separately, and has its [own license](https://nmap.org/npsl/).
 
-Compare two XML files:
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `scan` | Scoped Nmap TCP scans and service detection |
+| `report` | Nmap XML inventory and comparison with a baseline |
+| `web` | HTTP headers, cookie flags and negotiated TLS |
+| `sql-code` | SQL construction in Python, direct-call hints in JS/TS, SQL files |
+| `sql-query` | Unscoped writes, destructive statements and query review |
+| `sql-db` | SQLite schema, indexes, integrity and query plans |
+| `sqli-check` | Repeated SQL-error feedback from one GET parameter |
+| `credentials` | Local credential literals and comparisons between runs |
+| `combine` | Several module reports in one assessment |
+| `doctor` | Runtime versions and Nmap availability |
+
+Assessments produce HTML, JSON, Markdown, CSV and a SHA-256 manifest. HTML works offline, supports search and priority filters, and can be printed to PDF from the browser. Findings include evidence, confidence and suggested follow-up. Review priorities are not CVSS scores.
+
+## Network
 
 ```console
-python iris_recon.py report examples/current.xml --baseline examples/baseline.xml --out comparison
+python iris_recon.py report examples/current.xml --baseline examples/baseline.xml --out reports/network
+python iris_recon.py scan 127.0.0.1 --scope 127.0.0.1/32 --ports 22,80,443 --skip-discovery --out reports/lab-001
 ```
 
-This also produces `changes.json`. Changes distinguish newly observed ports, ports no longer observed, and changed state/service/CPE evidence. Missing observations are **not** labeled closed. Compare the same targets and port coverage; discovery, host availability and filtering can change visibility. Coverage and command differences are flagged. Host-only changes and nested NSE tables are not compared in this version.
+The example XML is a fixture; importing it makes no network requests. Scan profiles are `common`, `web`, `database` and `full`; explicit `--ports` override a profile. `--dry-run` prints the command. `--nmap-path` selects an executable.
 
-## Authorized scanning
+Targets are literal IPv4/IPv6 addresses or CIDRs inside the declared scope, up to 4096 addresses per run. Defaults: TCP connect, light version detection, normal timing, maximum packet rate 100, 120-second host timeout and 30-minute process timeout. `--max-rate` accepts 1-1000. Scan output directories must be new.
 
-For your own localhost lab:
+Comparisons include host changes and declared port coverage. A missing port entry does not prove closure: discovery, summarized results and incomplete scans can explain it. Service fingerprints are not confirmed vulnerabilities or CVE matches.
+
+## SQL source and query review
 
 ```console
-python iris_recon.py scan 127.0.0.1 --scope 127.0.0.1/32 --ports 22,80,443 --out lab-run-001
+python iris_recon.py sql-code ./src --out reports/source
+python iris_recon.py sql-query examples/review.sql --out reports/queries
 ```
 
-The target must be a literal IPv4/IPv6 address or CIDR inside your declared authorized scope. DNS names are not supported in this version. Each target range is limited to 4096 addresses. The declared scope is a user assertion, not proof of authorization.
+Python analysis follows local assignments into common SQL execution methods and identifies interpolation, concatenation and formatting. Literal queries with separately bound values are not flagged as dynamic construction. Unresolved query origins require manual review. Complex control flow, wrappers and indirect calls can be missed; this is not interprocedural taint analysis.
 
-The wrapper uses TCP connect scanning, light service detection, normal timing, disabled DNS lookup, a configurable maximum packet rate (default 100; range 1–1000), and a 120-second host timeout. Service detection actively sends protocol probes. `--skip-discovery` adds `-Pn` when host discovery is blocked. The entire process has a 30-minute timeout. Nmap may summarize uninteresting ports rather than enumerate each one.
+JS/TS checks are lexical hints for dynamic text directly inside query calls. Comments and non-SQL APIs can match; query variables and wrappers can be missed. Source is never executed. Query review covers common SQL constructs rather than full dialect validation. Reports omit source snippets and query literals.
 
-The scan output directory must be new to preserve existing evidence. It contains `command.json`, `scan.xml`, `nmap.log`, `report.json`, and `report.html`. Reports with a baseline also include `changes.json`. Offline report mode overwrites generated reports in the selected directory. Preserve the original XML and treat its contents and resulting reports as assessment data.
+Use parameter binding, for example with Python's SQLite driver:
 
-There is no arbitrary Nmap option passthrough, exploitation, brute force, or automatic NSE execution. Imported XML may contain results from other Nmap configurations; these are retained as evidence rather than executed. Reports load no external resources, escape scan-derived HTML, and do not fetch CVEs or upload findings.
+```python
+cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
+```
 
-## Validation
+Use the placeholder style supported by your driver. Dynamic identifiers need an allow-list or an identifier-composition API; value placeholders do not bind table or column names.
+
+## SQLite inspection
+
+```console
+python iris_recon.py sql-db ./lab.sqlite --out reports/database
+python iris_recon.py sql-db ./lab.sqlite --query-file ./lookup.sql --out reports/query-plan
+```
+
+Supports **SQLite files**, opened read-only with `query_only` enabled. Checks schema, index prefixes for foreign keys, integrity and foreign-key violations. The optional file must contain one SELECT statement without unbound placeholders. It is prepared with EXPLAIN QUERY PLAN, not executed to retrieve rows. Prefer an offline snapshot; live SQLite access may require locking or existing WAL sidecars.
+
+This module does not connect to PostgreSQL/MySQL servers or infer their users, permissions or application connection settings. Index and table-scan recommendations depend on workload.
+
+## HTTP and SQL injection signals
+
+```console
+python iris_recon.py web "http://127.0.0.1:8000/" --scope "http://127.0.0.1:8000" --out reports/web
+python iris_recon.py sqli-check "http://127.0.0.1:8000/search?id=1" --scope "http://127.0.0.1:8000" --param id --out reports/sqli
+```
+
+Use active checks on systems you own or are authorized to assess. The origin must match the declared scope. Redirects are not followed, TLS verification stays enabled and responses are bounded. TLS records one negotiated connection, not every supported protocol/cipher. Header recommendations depend on the endpoint's purpose.
+
+`sqli-check` takes two baselines and repeats one quote perturbation twice. New, repeated database-error feedback becomes a **potential** finding. Existing errors, unstable baselines and some status changes make the result inconclusive. This does not prove exploitability or rule out blind injection. Choose a read-only route: GET requests can still have side effects.
+
+There is no crawling, credential guessing, database dumping or account extraction. Bodies, cookie values and query values are omitted from reports. URL paths and selected security headers remain visible.
+
+## Credentials and rotation checks
+
+```console
+python iris_recon.py credentials ./config --key-file work/credentials.key --out reports/credentials-before
+python iris_recon.py credentials ./config --key-file work/credentials.key --baseline reports/credentials-before/report.json --out reports/credentials-after
+```
+
+The report shows associated usernames, locations and comparison results:
+
+| Result | Meaning |
+| --- | --- |
+| `unchanged` | Same literal at the tracked configuration entry |
+| `changed` | Different literal at that entry |
+| `newly_observed` | Entry was not in the baseline |
+| No longer observed | Previous entry is missing from current observations |
+
+This checks **files**, not which password a server accepts. Changed values do not prove successful rotation; missing entries do not prove revocation. Username association is best-effort. Duplicate keys are matched by occurrence order. Inspecting a different scope or unreadable files affects comparisons.
+
+Passwords and tokens are masked by default. Include full literal values in a **private local report** with `--reveal-secrets`:
+
+```console
+python iris_recon.py credentials ./config --key-file work/credentials.key --reveal-secrets --out reports/credentials-private
+```
+
+HMAC-SHA-256 comparisons use a locally generated random key. Reuse that key and keep it private; it is not included in reports. Reports containing revealed credentials must remain private. This module reads local literals, not credentials from remote services.
+
+`reports/`, `work/`, environment files, database files and generated report filenames are ignored by Git. Exclusions do not protect files copied elsewhere or added with `git add -f`.
+
+## Combined reports and CI
+
+```console
+python iris_recon.py combine reports/network/report.json reports/source/report.json --out reports/combined
+python iris_recon.py sql-code ./src --out reports/source --fail-on medium
+```
+
+Exit codes: `0` completed, `1` input/operational error, `2` finding threshold reached, `3` partial/inconclusive. A selected finding threshold takes precedence over `3`.
+
+Offline output files are replaced when a directory is reused; use separate directories to retain baselines. The manifest is an integrity record, not a signature. Compare it against a trusted copy.
+
+## Development
 
 ```console
 python -m unittest discover -s tests -v
 ```
 
-Tests cover XML evidence extraction, HTML injection escaping, observation changes, coverage changes, malformed/entity-bearing XML, scope/port validation, offline output, and mocked Nmap process orchestration. A mocked process is not a real Nmap integration test.
+Tests cover a local HTTP/SQLite lab, a parameterized-query control, credential rotation, XML entity rejection and report escaping. The Nmap integration test scans localhost and skips if Nmap is absent. CI installs Nmap on Linux; Windows exercises the remaining modules.
 
-## Next milestones
-
-- Real Nmap integration matrix on Windows, Linux and macOS.
-- Host-level changes and explicit scan-coverage reconciliation.
-- Opt-in TLS/HTTP assessment modules with evidence and remediation templates.
-- Saved assessment scopes and signed evidence manifests.
-
-## References
-
-The parser uses Nmap's [recommended XML interface](https://nmap.org/book/output-formats-xml-output.html). The scan preset uses [light service detection](https://nmap.org/book/man-version-detection.html). A service fingerprint or open port is an observation, not a confirmed vulnerability or CVE match.
+References: [Nmap XML](https://nmap.org/book/output-formats-xml-output.html), [OWASP SQL injection prevention](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html), [SQLite PRAGMA](https://www.sqlite.org/pragma.html).
