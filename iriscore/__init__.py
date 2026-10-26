@@ -1,3 +1,2 @@
-"""Iris Recon assessment modules."""
-
-__version__ = '0.2.0'
+"""Legacy compatibility shim for iriscore; redirects to inmapcore."""
+from inmapcore import __version__

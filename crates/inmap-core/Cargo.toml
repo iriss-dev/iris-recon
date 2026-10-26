@@ -1,0 +1,9 @@
+[package]
+name = "inmap-core"
+version = "1.0.0"
+edition = "2021"
+authors = ["iriss-dev / INMAP Team"]
+description = "High-performance asynchronous network assessment engine & CIDR intelligence core for INMAP"
+license = "Apache-2.0"
+
+[dependencies]

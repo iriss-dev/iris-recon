@@ -3,15 +3,16 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "iris-recon"
-version = "0.2.0"
-description = "Network, web and SQL assessment tools with local evidence reports"
+name = "inmap"
+version = "1.0.0"
+description = "Infrastructure & Network Mapper / Intelligence Assessment Platform with Native Async Scanner, Threat Intel & MCP"
 requires-python = ">=3.11"
 dependencies = ["defusedxml>=0.7.1,<1", "sqlparse>=0.5.3,<0.6"]
 
 [project.scripts]
+inmap = "inmap:main"
 iris-recon = "iris_recon:main"
 
 [tool.setuptools]
-py-modules = ["iris_recon"]
-packages = ["iriscore"]
+py-modules = ["inmap", "iris_recon"]
+packages = ["inmapcore", "iriscore"]

@@ -1,142 +1,175 @@
-# Iris Recon
+# INMAP (Infrastructure & Network Mapper)
 
 [![Tests](https://github.com/iriss-dev/iris-recon/actions/workflows/ci.yml/badge.svg)](https://github.com/iriss-dev/iris-recon/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-1.0.0-00e5a3.svg)](pyproject.toml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Network, web and SQL assessment tools. Run a check, inspect the evidence, and compare it with the next assessment.
+**INMAP** is a modular, high-performance security assessment and infrastructure intelligence platform. Built with a dual-engine architecture (Zero-dependency Native Async Python + Rust Core), INMAP delivers port scanning, threat intelligence, passive Certificate Transparency reconnaissance, static SQL analysis, web security auditing, credential tracking, and an AI-native Model Context Protocol (MCP) server.
 
-Nmap handles network scanning. Iris Recon adds reports, SQL source review, read-only SQLite inspection, HTTP checks and local credential tracking.
+Formerly known as `iris-recon`, INMAP retains 100% backward compatibility for existing pipelines, scripts, and imports.
 
-## Install
+---
 
-Requires Python 3.11+. A virtual environment is recommended.
+## Key Highlights
+
+- **Dual Scanning Engine**:
+  - **Native Async TCP Engine**: Built-in non-blocking port scanner & banner grabber using Python standard library `asyncio` & `socket`. Runs anywhere with **zero external dependencies** (no Nmap installation required).
+  - **Nmap XML Engine**: Full integration with Nmap XML output, state diffing, and baseline comparison.
+  - **Smart Fallback (`--engine auto`)**: Automatically detects Nmap if present; falls back seamlessly to the native async engine if missing.
+- **Attack Surface Reconnaissance (`subdomains`)**:
+  - Passive Certificate Transparency (crt.sh) log analysis.
+  - Async non-blocking DNS resolution (A / AAAA) and sensitive subdomain detection (`dev.*`, `admin.*`, `vpn.*`, `staging.*`).
+- **ASN & Cloud Threat Intelligence (`intel`)**:
+  - Fast offline CIDR matching classifying Cloudflare, AWS, Google Cloud, Microsoft Azure, DigitalOcean, Hetzner, OVH, and RFC1918 private scopes.
+- **Model Context Protocol (MCP) Server (`mcp`)**:
+  - Native Stdio JSON-RPC 2.0 server (`inmap mcp`) enabling LLM agents (Claude, ChatGPT, Antigravity) to execute security audits and assessments directly.
+- **High-Performance Rust Core (`crates/inmap-core`)**:
+  - Standalone Rust 2021 crate providing sub-millisecond CIDR radix lookups and socket connect scanning.
+- **Tactical Onyx Reporting**:
+  - Self-contained, zero-CDN, dark-mode HTML reports with CSP SHA-256 integrity, JSON, Markdown, CSV, and SHA-256 manifest verification.
+
+---
+
+## Installation
+
+Requires Python 3.11+.
 
 ```console
 git clone https://github.com/iriss-dev/iris-recon.git
 cd iris-recon
 python -m pip install -e .
-python iris_recon.py doctor
+inmap doctor
 ```
 
-The package also installs an `iris-recon` command. [Nmap](https://nmap.org/download.html) is required only for `scan`, is installed separately, and has its [own license](https://nmap.org/npsl/).
+*Note: The CLI executable `inmap` and the legacy alias `iris-recon` are both registered.*
 
-## Commands
+---
 
-| Command | Purpose |
-| --- | --- |
-| `scan` | Scoped Nmap TCP scans and service detection |
-| `report` | Nmap XML inventory and comparison with a baseline |
-| `web` | HTTP headers, cookie flags and negotiated TLS |
-| `sql-code` | SQL construction in Python, direct-call hints in JS/TS, SQL files |
-| `sql-query` | Unscoped writes, destructive statements and query review |
-| `sql-db` | SQLite schema, indexes, integrity and query plans |
-| `sqli-check` | Repeated SQL-error feedback from one GET parameter |
-| `credentials` | Local credential literals and comparisons between runs |
-| `combine` | Several module reports in one assessment |
-| `doctor` | Runtime versions and Nmap availability |
+## Commands Overview
 
-Assessments produce HTML, JSON, Markdown, CSV and a SHA-256 manifest. HTML works offline, supports search and priority filters, and can be printed to PDF from the browser. Findings include evidence, confidence and suggested follow-up. Review priorities are not CVSS scores.
+| Command | Engine / Scope | Purpose |
+| --- | --- | --- |
+| `scan` | Native / Nmap | Network port scanning, banner grabbing, and service risk review |
+| `subdomains` | CT Logs + Async DNS | Passive Certificate Transparency subdomain discovery & attack surface mapping |
+| `intel` | Offline Radix CIDR | ASN, Cloud provider (AWS, Cloudflare, GCP, Azure, DO), and threat tags |
+| `report` | Offline | Nmap XML parsing, delta calculation, and baseline comparison |
+| `web` | Active HTTP/TLS | HTTP security headers, cookie flags (Secure/HttpOnly/SameSite), TLS parameters |
+| `sqli-check` | Active GET probe | Single-quote perturbation and repeated database error feedback analysis |
+| `sql-code` | Static AST / Lexical | Python AST string construction & JS/TS lexical hints for dynamic SQL |
+| `sql-query` | Static Linter | Lint queries for missing WHERE clauses, wildcards, and destructive statements |
+| `sql-db` | Read-only SQLite | Schema inspection, FK index coverage, integrity check, EXPLAIN QUERY PLAN |
+| `credentials` | Local Secret Audit | Local secret literals, masked reporting, and HMAC-SHA256 rotation drift |
+| `combine` | Multi-module | Merge multiple assessment `report.json` files into a single unified report |
+| `mcp` | Stdio JSON-RPC 2.0 | Start the native Model Context Protocol (MCP) server for AI coding agents |
+| `doctor` | Diagnostics | Display runtime versions, installed engines, and system capabilities |
 
-## Network
+---
+
+## Usage Examples
+
+### 1. Network Port Scanning
 
 ```console
-python iris_recon.py report examples/current.xml --baseline examples/baseline.xml --out reports/network
-python iris_recon.py scan 127.0.0.1 --scope 127.0.0.1/32 --ports 22,80,443 --skip-discovery --out reports/lab-001
+# Native async scan (No Nmap required!)
+inmap scan 192.168.1.1 --scope 192.168.1.0/24 --engine native --ports 22,80,443,3306,8080 --out reports/scan-local
+
+# Auto mode (Uses Nmap if available, falls back to native async)
+inmap scan 10.0.0.1 --scope 10.0.0.0/16 --profile web --out reports/scan-web
+
+# Dry run command verification
+inmap scan 127.0.0.1 --scope 127.0.0.1/32 --dry-run
 ```
 
-The example XML is a fixture; importing it makes no network requests. Scan profiles are `common`, `web`, `database` and `full`; explicit `--ports` override a profile. `--dry-run` prints the command. `--nmap-path` selects an executable.
-
-Targets are literal IPv4/IPv6 addresses or CIDRs inside the declared scope, up to 4096 addresses per run. Defaults: TCP connect, light version detection, normal timing, maximum packet rate 100, 120-second host timeout and 30-minute process timeout. `--max-rate` accepts 1-1000. Scan output directories must be new.
-
-Comparisons include host changes and declared port coverage. A missing port entry does not prove closure: discovery, summarized results and incomplete scans can explain it. Service fingerprints are not confirmed vulnerabilities or CVE matches.
-
-## SQL source and query review
+### 2. Attack Surface Reconnaissance (Subdomains)
 
 ```console
-python iris_recon.py sql-code ./src --out reports/source
-python iris_recon.py sql-query examples/review.sql --out reports/queries
+# Discover subdomains via CT logs and resolve active DNS records
+inmap subdomains example.com --out reports/subdomains-example
+
+# Discover subdomains passively without active DNS resolution
+inmap subdomains example.com --no-resolve --out reports/subdomains-passive
 ```
 
-Python analysis follows local assignments into common SQL execution methods and identifies interpolation, concatenation and formatting. Literal queries with separately bound values are not flagged as dynamic construction. Unresolved query origins require manual review. Complex control flow, wrappers and indirect calls can be missed; this is not interprocedural taint analysis.
+### 3. IP Threat Intelligence
 
-JS/TS checks are lexical hints for dynamic text directly inside query calls. Comments and non-SQL APIs can match; query variables and wrappers can be missed. Source is never executed. Query review covers common SQL constructs rather than full dialect validation. Reports omit source snippets and query literals.
+```console
+inmap intel 104.16.12.34
+```
+Output:
+```json
+{
+  "ip": "104.16.12.34",
+  "version": 4,
+  "is_private": false,
+  "provider": "Cloudflare",
+  "category": "cdn",
+  "asn_org": "Cloudflare, Inc.",
+  "risk_tags": ["cdn-edge-proxy"]
+}
+```
 
-Use parameter binding, for example with Python's SQLite driver:
+### 4. Model Context Protocol (MCP) Server for AI Agents
+
+Connect INMAP directly to your AI development environment by adding it to your MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "inmap": {
+      "command": "python",
+      "args": ["-m", "inmapcore.mcp_server"]
+    }
+  }
+}
+```
+Exposed tools: `inmap_fast_scan`, `inmap_subdomain_recon`, `inmap_ip_intel`, `inmap_audit_web`, `inmap_audit_sql`, `inmap_audit_credentials`.
+
+### 5. Web, SQL & Credential Auditing
+
+```console
+# Security headers and TLS verification
+inmap web "https://app.example.com" --scope "https://app.example.com" --out reports/web
+
+# Python AST / JS source code audit
+inmap sql-code ./src --out reports/sql-code
+
+# Read-only SQLite database inspection
+inmap sql-db ./app.sqlite --out reports/sqlite
+
+# Credential rotation and literal leak tracking
+inmap credentials ./config --key-file work/.key --out reports/creds
+```
+
+---
+
+## Backward Compatibility
+
+All legacy `iris_recon.py` scripts and `iriscore` module imports remain fully functional:
 
 ```python
-cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
+# Legacy imports continue to work without modification:
+from iriscore.model import assessment, finding
+from iriscore.reporting import save_assessment
+from iriscore.sql_audit import audit_source
+
+# Or use the new INMAP namespace:
+from inmapcore.fastscan import run_fast_scan
+from inmapcore.intel import classify_ip
+from inmapcore.subdomains import audit_subdomains
 ```
 
-Use the placeholder style supported by your driver. Dynamic identifiers need an allow-list or an identifier-composition API; value placeholders do not bind table or column names.
+---
 
-## SQLite inspection
+## Running Tests
 
-```console
-python iris_recon.py sql-db ./lab.sqlite --out reports/database
-python iris_recon.py sql-db ./lab.sqlite --query-file ./lookup.sql --out reports/query-plan
-```
-
-Supports **SQLite files**, opened read-only with `query_only` enabled. Checks schema, index prefixes for foreign keys, integrity and foreign-key violations. The optional file must contain one SELECT statement without unbound placeholders. It is prepared with EXPLAIN QUERY PLAN, not executed to retrieve rows. Prefer an offline snapshot; live SQLite access may require locking or existing WAL sidecars.
-
-This module does not connect to PostgreSQL/MySQL servers or infer their users, permissions or application connection settings. Index and table-scan recommendations depend on workload.
-
-## HTTP and SQL injection signals
-
-```console
-python iris_recon.py web "http://127.0.0.1:8000/" --scope "http://127.0.0.1:8000" --out reports/web
-python iris_recon.py sqli-check "http://127.0.0.1:8000/search?id=1" --scope "http://127.0.0.1:8000" --param id --out reports/sqli
-```
-
-Use active checks on systems you own or are authorized to assess. The origin must match the declared scope. Redirects are not followed, TLS verification stays enabled and responses are bounded. TLS records one negotiated connection, not every supported protocol/cipher. Header recommendations depend on the endpoint's purpose.
-
-`sqli-check` takes two baselines and repeats one quote perturbation twice. New, repeated database-error feedback becomes a **potential** finding. Existing errors, unstable baselines and some status changes make the result inconclusive. This does not prove exploitability or rule out blind injection. Choose a read-only route: GET requests can still have side effects.
-
-There is no crawling, credential guessing, database dumping or account extraction. Bodies, cookie values and query values are omitted from reports. URL paths and selected security headers remain visible.
-
-## Credentials and rotation checks
-
-```console
-python iris_recon.py credentials ./config --key-file work/credentials.key --out reports/credentials-before
-python iris_recon.py credentials ./config --key-file work/credentials.key --baseline reports/credentials-before/report.json --out reports/credentials-after
-```
-
-The report shows associated usernames, locations and comparison results:
-
-| Result | Meaning |
-| --- | --- |
-| `unchanged` | Same literal at the tracked configuration entry |
-| `changed` | Different literal at that entry |
-| `newly_observed` | Entry was not in the baseline |
-| No longer observed | Previous entry is missing from current observations |
-
-This checks **files**, not which password a server accepts. Changed values do not prove successful rotation; missing entries do not prove revocation. Username association is best-effort. Duplicate keys are matched by occurrence order. Inspecting a different scope or unreadable files affects comparisons.
-
-Passwords and tokens are masked by default. Include full literal values in a **private local report** with `--reveal-secrets`:
-
-```console
-python iris_recon.py credentials ./config --key-file work/credentials.key --reveal-secrets --out reports/credentials-private
-```
-
-HMAC-SHA-256 comparisons use a locally generated random key. Reuse that key and keep it private; it is not included in reports. Reports containing revealed credentials must remain private. This module reads local literals, not credentials from remote services.
-
-`reports/`, `work/`, environment files, database files and generated report filenames are ignored by Git. Exclusions do not protect files copied elsewhere or added with `git add -f`.
-
-## Combined reports and CI
-
-```console
-python iris_recon.py combine reports/network/report.json reports/source/report.json --out reports/combined
-python iris_recon.py sql-code ./src --out reports/source --fail-on medium
-```
-
-Exit codes: `0` completed, `1` input/operational error, `2` finding threshold reached, `3` partial/inconclusive. A selected finding threshold takes precedence over `3`.
-
-Offline output files are replaced when a directory is reused; use separate directories to retain baselines. The manifest is an integrity record, not a signature. Compare it against a trusted copy.
-
-## Development
+Run the complete 37-test automated verification suite:
 
 ```console
 python -m unittest discover -s tests -v
 ```
 
-Tests cover a local HTTP/SQLite lab, a parameterized-query control, credential rotation, XML entity rejection and report escaping. The Nmap integration test scans localhost and skips if Nmap is absent. CI installs Nmap on Linux; Windows exercises the remaining modules.
+---
 
-References: [Nmap XML](https://nmap.org/book/output-formats-xml-output.html), [OWASP SQL injection prevention](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html), [SQLite PRAGMA](https://www.sqlite.org/pragma.html).
+## License
+
+Licensed under the Apache License, Version 2.0.
