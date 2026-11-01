@@ -19,6 +19,8 @@ ERRORS = {
     'sqlserver': r'unclosed quotation mark after the character string',
     'oracle': r'ORA-(?:00933|01756|00936)\b',
 }
+PASSWORD_INPUT = re.compile(r'<input\b[^>]*\btype\s*=\s*["\']?password\b', re.I)
+CSRF_INPUT = re.compile(r'<input\b[^>]*\bname\s*=\s*["\']?[^"\'>\s]*(?:csrf|token|authenticity|verification)', re.I)
 
 
 def origin(url):
@@ -60,11 +62,10 @@ def fetch(url, scope, label='baseline', timeout=10):
             tls = {'protocol': conn.sock.version(), 'cipher': conn.sock.cipher()[0],
                    'not_after': cert.get('notAfter'), 'hostname_and_chain_verified': True}
         conn.request('GET', urlunsplit(('', '', parts.path or '/', parts.query, '')),
-                     headers={'User-Agent': 'INMAP/1.0.0 (Assessment Engine)', 'Accept-Encoding': 'identity', 'Connection': 'close'})
+                     headers={'User-Agent': 'INMAP/1.0', 'Accept-Encoding': 'identity', 'Connection': 'close'})
         request_socket = conn.sock
         response = conn.getresponse()
         chunks, size = [], 0
-        # read1 returns available bytes, allowing a wall-clock deadline even for trickling responses.
         while size <= MAX_BODY:
             remaining = timeout - (time.monotonic() - started)
             if remaining <= 0:
@@ -77,13 +78,12 @@ def fetch(url, scope, label='baseline', timeout=10):
             chunks.append(chunk)
             size += len(chunk)
         raw = b''.join(chunks)
-        result = {'label': label, 'url': redacted_url(url), 'status': response.status,
-                  'bytes': len(raw), 'truncated': len(raw) > MAX_BODY,
-                  'unsupported_encoding': response.getheader('Content-Encoding', 'identity').lower() not in ('', 'identity'),
-                  'sha256': hashlib.sha256(raw).hexdigest(), 'tls': tls,
-                  'elapsed_ms': round((time.monotonic() - started) * 1000),
-                  '_body': raw.decode('utf-8', errors='replace'), '_headers': response.getheaders()}
-        return result
+        return {'label': label, 'url': redacted_url(url), 'status': response.status,
+                'bytes': len(raw), 'truncated': len(raw) > MAX_BODY,
+                'unsupported_encoding': response.getheader('Content-Encoding', 'identity').lower() not in ('', 'identity'),
+                'sha256': hashlib.sha256(raw).hexdigest(), 'tls': tls,
+                'elapsed_ms': round((time.monotonic() - started) * 1000),
+                '_body': raw.decode('utf-8', errors='replace'), '_headers': response.getheaders()}
     finally:
         conn.close()
 
@@ -118,6 +118,28 @@ def audit_web(url, scope):
     if html_response and 'x-frame-options' not in headers and 'frame-ancestors' not in headers.get('content-security-policy', '').lower():
         report['findings'].append(finding('WEB006', 'Framing policy not observed', asset, 'low', 'high',
             {'content_type': headers.get('content-type')}, 'If this page should not be embedded, configure CSP frame-ancestors for the required origins.'))
+
+    acao = headers.get('access-control-allow-origin', '')
+    acac = headers.get('access-control-allow-credentials', '').lower() == 'true'
+    if acao == '*' and acac:
+        report['findings'].append(finding('WEB008', 'Permissive CORS policy with credentials enabled', asset, 'high', 'high',
+            {'access_control_allow_origin': acao, 'allow_credentials': True},
+            'Restrict Access-Control-Allow-Origin to explicit trusted origins when credentials are permitted.'))
+    elif acao == '*':
+        report['findings'].append(finding('WEB008', 'Wildcard CORS policy observed', asset, 'low', 'high',
+            {'access_control_allow_origin': acao},
+            'Confirm whether this endpoint is intended for public cross-origin consumption. Restrict origins for private APIs.'))
+
+    if html_response and PASSWORD_INPUT.search(result['_body']):
+        if not CSRF_INPUT.search(result['_body']):
+            report['findings'].append(finding('WEB009', 'Password form without apparent CSRF token field', asset, 'medium', 'medium',
+                {'password_field_observed': True, 'csrf_field_observed': False},
+                'Include an anti-CSRF token or verify SameSite cookie and custom-header protections on authentication forms.'))
+        if not any(h in headers for h in ('ratelimit-limit', 'x-ratelimit-limit', 'retry-after')):
+            report['findings'].append(finding('WEB010', 'Authentication page without rate-limit headers', asset, 'low', 'medium',
+                {'password_field_observed': True},
+                'Verify that login attempts are throttled and protected against automated credential guessing at the application or gateway layer.'))
+
     cookies = []
     for key, value in result['_headers']:
         if key.lower() != 'set-cookie':
@@ -135,14 +157,21 @@ def audit_web(url, scope):
                     'low', 'high', flags, 'For session cookies, use Secure, HttpOnly and an appropriate SameSite policy. Some non-session cookies intentionally need JavaScript access.'))
     report['data']['cookies'] = cookies
     report['data']['headers'] = {k: v for k, v in headers.items() if k in (
-        'content-type', 'content-security-policy', 'strict-transport-security', 'x-frame-options', 'x-content-type-options', 'referrer-policy')}
-    if result['tls'] and result['tls']['not_after']:
-        expiry = ssl.cert_time_to_seconds(result['tls']['not_after'])
-        remaining = int((expiry - datetime.now(timezone.utc).timestamp()) / 86400)
-        report['data']['certificate_days_remaining'] = remaining
-        if remaining <= 30:
-            report['findings'].append(finding('TLS001', 'TLS certificate expires within 30 days', asset, 'low', 'high',
-                {'days_remaining': remaining}, 'Confirm automated renewal and alerting before certificate expiry.', status='observed'))
+        'content-type', 'content-security-policy', 'strict-transport-security', 'x-frame-options',
+        'x-content-type-options', 'referrer-policy', 'access-control-allow-origin', 'access-control-allow-credentials')}
+    if result['tls']:
+        proto = result['tls'].get('protocol') or ''
+        cipher = result['tls'].get('cipher') or ''
+        if proto in ('TLSv1', 'TLSv1.1', 'SSLv3') or any(w in cipher.upper() for w in ('RC4', '3DES', 'NULL', 'MD5')):
+            report['findings'].append(finding('TLS002', 'Weak TLS protocol or cipher negotiated', asset, 'high', 'high',
+                {'protocol': proto, 'cipher': cipher}, 'Disable TLS 1.0/1.1 and weak ciphers; require TLS 1.2+ with AEAD cipher suites.', status='observed'))
+        if result['tls'].get('not_after'):
+            expiry = ssl.cert_time_to_seconds(result['tls']['not_after'])
+            remaining = int((expiry - datetime.now(timezone.utc).timestamp()) / 86400)
+            report['data']['certificate_days_remaining'] = remaining
+            if remaining <= 30:
+                report['findings'].append(finding('TLS001', 'TLS certificate expires within 30 days', asset, 'low', 'high',
+                    {'days_remaining': remaining}, 'Confirm automated renewal and alerting before certificate expiry.', status='observed'))
     if 300 <= result['status'] < 400:
         report['status'] = 'partial'
         report['limitations'].append('The response was a redirect. Assess the intended destination separately within its declared scope.')

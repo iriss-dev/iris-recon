@@ -1,38 +1,14 @@
-# INMAP (Infrastructure & Network Mapper)
+# INMAP
 
 [![Tests](https://github.com/iriss-dev/iris-recon/actions/workflows/ci.yml/badge.svg)](https://github.com/iriss-dev/iris-recon/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.0.0-00e5a3.svg)](pyproject.toml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**INMAP** is a modular, high-performance security assessment and infrastructure intelligence platform. Built with a dual-engine architecture (Zero-dependency Native Async Python + Rust Core), INMAP delivers port scanning, threat intelligence, passive Certificate Transparency reconnaissance, static SQL analysis, web security auditing, credential tracking, and an AI-native Model Context Protocol (MCP) server.
+Network, web, SQL, DNS, IaC and dependency assessment tools with local evidence reports.
 
-Formerly known as `iris-recon`, INMAP retains 100% backward compatibility for existing pipelines, scripts, and imports.
+INMAP (formerly `iris-recon`) includes an asynchronous TCP scanner, Nmap XML comparison, Certificate Transparency subdomain discovery, SPF/DMARC checks, SQL static analysis, read-only SQLite inspection, HTTP/TLS/CORS checks, credential tracking, container/CI linting, CycloneDX SBOM generation and an MCP stdio server.
 
----
+## Install
 
-## Key Highlights
-
-- **Dual Scanning Engine**:
-  - **Native Async TCP Engine**: Built-in non-blocking port scanner & banner grabber using Python standard library `asyncio` & `socket`. Runs anywhere with **zero external dependencies** (no Nmap installation required).
-  - **Nmap XML Engine**: Full integration with Nmap XML output, state diffing, and baseline comparison.
-  - **Smart Fallback (`--engine auto`)**: Automatically detects Nmap if present; falls back seamlessly to the native async engine if missing.
-- **Attack Surface Reconnaissance (`subdomains`)**:
-  - Passive Certificate Transparency (crt.sh) log analysis.
-  - Async non-blocking DNS resolution (A / AAAA) and sensitive subdomain detection (`dev.*`, `admin.*`, `vpn.*`, `staging.*`).
-- **ASN & Cloud Threat Intelligence (`intel`)**:
-  - Fast offline CIDR matching classifying Cloudflare, AWS, Google Cloud, Microsoft Azure, DigitalOcean, Hetzner, OVH, and RFC1918 private scopes.
-- **Model Context Protocol (MCP) Server (`mcp`)**:
-  - Native Stdio JSON-RPC 2.0 server (`inmap mcp`) enabling LLM agents (Claude, ChatGPT, Antigravity) to execute security audits and assessments directly.
-- **High-Performance Rust Core (`crates/inmap-core`)**:
-  - Standalone Rust 2021 crate providing sub-millisecond CIDR radix lookups and socket connect scanning.
-- **Tactical Onyx Reporting**:
-  - Self-contained, zero-CDN, dark-mode HTML reports with CSP SHA-256 integrity, JSON, Markdown, CSV, and SHA-256 manifest verification.
-
----
-
-## Installation
-
-Requires Python 3.11+.
+Requires Python 3.11+. A virtual environment is recommended.
 
 ```console
 git clone https://github.com/iriss-dev/iris-recon.git
@@ -41,135 +17,67 @@ python -m pip install -e .
 inmap doctor
 ```
 
-*Note: The CLI executable `inmap` and the legacy alias `iris-recon` are both registered.*
+Both `inmap` and `iris-recon` commands are installed. [Nmap](https://nmap.org/download.html) is optional: `scan --engine auto` uses Nmap when present on `PATH` and falls back to the built-in asynchronous TCP scanner otherwise.
 
----
+## Commands
 
-## Commands Overview
+| Command | Purpose |
+| --- | --- |
+| `scan` | Scoped TCP port scans (`--engine auto\|native\|nmap`) and banner checks |
+| `report` | Offline Nmap XML inventory and baseline comparison |
+| `subdomains` | Certificate Transparency (`crt.sh`) lookup and DNS resolution |
+| `dns` | Domain SPF and DMARC mail authentication review |
+| `intel` | Offline IP classification against cloud, CDN and RFC1918 ranges |
+| `web` | HTTP security headers, CORS, cookie flags, login form controls and TLS |
+| `sqli-check` | Repeated SQL-error feedback from one GET parameter |
+| `sql-code` | SQL construction in Python, direct-call hints in JS/TS, SQL files |
+| `sql-query` | Unscoped writes, destructive statements and query lint |
+| `sql-db` | Read-only SQLite schema, indexes, integrity and query plans |
+| `credentials` | Local credential literals, token signatures, entropy and rotation tracking |
+| `iac` | Dockerfile, Compose, GitHub Actions workflow and crypto call review |
+| `deps` | Dependency manifest pinning, CycloneDX SBOM export and optional OSV lookup |
+| `combine` | Merge several module `report.json` files into one assessment |
+| `mcp` | Model Context Protocol (JSON-RPC 2.0 stdio) server |
+| `doctor` | Runtime versions and engine availability |
 
-| Command | Engine / Scope | Purpose |
-| --- | --- | --- |
-| `scan` | Native / Nmap | Network port scanning, banner grabbing, and service risk review |
-| `subdomains` | CT Logs + Async DNS | Passive Certificate Transparency subdomain discovery & attack surface mapping |
-| `intel` | Offline Radix CIDR | ASN, Cloud provider (AWS, Cloudflare, GCP, Azure, DO), and threat tags |
-| `report` | Offline | Nmap XML parsing, delta calculation, and baseline comparison |
-| `web` | Active HTTP/TLS | HTTP security headers, cookie flags (Secure/HttpOnly/SameSite), TLS parameters |
-| `sqli-check` | Active GET probe | Single-quote perturbation and repeated database error feedback analysis |
-| `sql-code` | Static AST / Lexical | Python AST string construction & JS/TS lexical hints for dynamic SQL |
-| `sql-query` | Static Linter | Lint queries for missing WHERE clauses, wildcards, and destructive statements |
-| `sql-db` | Read-only SQLite | Schema inspection, FK index coverage, integrity check, EXPLAIN QUERY PLAN |
-| `credentials` | Local Secret Audit | Local secret literals, masked reporting, and HMAC-SHA256 rotation drift |
-| `combine` | Multi-module | Merge multiple assessment `report.json` files into a single unified report |
-| `mcp` | Stdio JSON-RPC 2.0 | Start the native Model Context Protocol (MCP) server for AI coding agents |
-| `doctor` | Diagnostics | Display runtime versions, installed engines, and system capabilities |
+Assessments generate `report.html`, `report.json`, `report.md`, `findings.csv` and `manifest.json` (plus `sbom.cdx.json` for `deps`). Findings include CWE and OWASP Top 10 mappings where applicable.
 
----
-
-## Usage Examples
-
-### 1. Network Port Scanning
-
-```console
-# Native async scan (No Nmap required!)
-inmap scan 192.168.1.1 --scope 192.168.1.0/24 --engine native --ports 22,80,443,3306,8080 --out reports/scan-local
-
-# Auto mode (Uses Nmap if available, falls back to native async)
-inmap scan 10.0.0.1 --scope 10.0.0.0/16 --profile web --out reports/scan-web
-
-# Dry run command verification
-inmap scan 127.0.0.1 --scope 127.0.0.1/32 --dry-run
-```
-
-### 2. Attack Surface Reconnaissance (Subdomains)
+## Network, Subdomains and DNS
 
 ```console
-# Discover subdomains via CT logs and resolve active DNS records
-inmap subdomains example.com --out reports/subdomains-example
-
-# Discover subdomains passively without active DNS resolution
-inmap subdomains example.com --no-resolve --out reports/subdomains-passive
-```
-
-### 3. IP Threat Intelligence
-
-```console
+inmap scan 127.0.0.1 --scope 127.0.0.1/32 --engine native --ports 22,80,443 --out reports/net
+inmap report examples/current.xml --baseline examples/baseline.xml --out reports/xml
+inmap subdomains example.com --out reports/subdomains
+inmap dns example.com --out reports/dns
 inmap intel 104.16.12.34
 ```
-Output:
-```json
-{
-  "ip": "104.16.12.34",
-  "version": 4,
-  "is_private": false,
-  "provider": "Cloudflare",
-  "category": "cdn",
-  "asn_org": "Cloudflare, Inc.",
-  "risk_tags": ["cdn-edge-proxy"]
-}
-```
 
-### 4. Model Context Protocol (MCP) Server for AI Agents
+Targets for `scan` must reside within the declared `--scope`. Profiles are `common`, `web`, `database` and `full`.
 
-Connect INMAP directly to your AI development environment by adding it to your MCP configuration:
-
-```json
-{
-  "mcpServers": {
-    "inmap": {
-      "command": "python",
-      "args": ["-m", "inmapcore.mcp_server"]
-    }
-  }
-}
-```
-Exposed tools: `inmap_fast_scan`, `inmap_subdomain_recon`, `inmap_ip_intel`, `inmap_audit_web`, `inmap_audit_sql`, `inmap_audit_credentials`.
-
-### 5. Web, SQL & Credential Auditing
+## Web, SQL and Database
 
 ```console
-# Security headers and TLS verification
-inmap web "https://app.example.com" --scope "https://app.example.com" --out reports/web
-
-# Python AST / JS source code audit
-inmap sql-code ./src --out reports/sql-code
-
-# Read-only SQLite database inspection
-inmap sql-db ./app.sqlite --out reports/sqlite
-
-# Credential rotation and literal leak tracking
-inmap credentials ./config --key-file work/.key --out reports/creds
+inmap web "http://127.0.0.1:8000/" --scope "http://127.0.0.1:8000" --out reports/web
+inmap sqli-check "http://127.0.0.1:8000/search?id=1" --scope "http://127.0.0.1:8000" --param id --out reports/sqli
+inmap sql-code ./src --out reports/source
+inmap sql-query examples/review.sql --out reports/queries
+inmap sql-db ./lab.sqlite --query-file ./lookup.sql --out reports/db
 ```
 
----
+`web` inspects security headers, CORS policies, cookie flags, negotiated TLS and defensive controls on password forms (CSRF token fields and rate-limit headers) without submitting credentials.
 
-## Backward Compatibility
+## Credentials, IaC and Dependencies
 
-All legacy `iris_recon.py` scripts and `iriscore` module imports remain fully functional:
-
-```python
-# Legacy imports continue to work without modification:
-from iriscore.model import assessment, finding
-from iriscore.reporting import save_assessment
-from iriscore.sql_audit import audit_source
-
-# Or use the new INMAP namespace:
-from inmapcore.fastscan import run_fast_scan
-from inmapcore.intel import classify_ip
-from inmapcore.subdomains import audit_subdomains
+```console
+inmap credentials ./config --key-file work/credentials.key --out reports/creds
+inmap iac . --out reports/iac
+inmap deps . --osv --out reports/deps
 ```
 
----
+`credentials` masks secret values by default (`--reveal-secrets` includes full literals for private local review) and compares HMAC-SHA-256 fingerprints across runs. `iac` checks Dockerfiles, Compose configurations, GitHub workflows and weak hash/TLS settings in source files. `deps` inspects `requirements.txt`, `pyproject.toml`, `package.json` and `Cargo.lock`.
 
-## Running Tests
-
-Run the complete 37-test automated verification suite:
+## Development
 
 ```console
 python -m unittest discover -s tests -v
 ```
-
----
-
-## License
-
-Licensed under the Apache License, Version 2.0.

@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -14,7 +15,24 @@ SECRET_KEY = re.compile(r'(?:^|[_-])(password|passwd|pwd|secret|token|api_key|ap
 USER_KEY = re.compile(r'(?:^|[_-])(username|user|login)$', re.I)
 ASSIGNMENT = re.compile(r'''^\s*(?:export\s+)?["']?([\w.-]+)["']?\s*[:=]\s*(?:"([^"\n]*)"|'([^'\n]*)'|([^\s#,;]+))''')
 URL = re.compile(r'\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|mssql)://[^\s"\'<>]+', re.I)
+TOKEN_SIGNATURES = [
+    ('aws_access_key', re.compile(r'\b(AKIA[0-9A-Z]{16})\b')),
+    ('github_token', re.compile(r'\b(gh[pousr]_[A-Za-z0-9_]{36,255})\b')),
+    ('stripe_secret', re.compile(r'\b(sk_live_[0-9a-zA-Z]{24,99})\b')),
+    ('slack_token', re.compile(r'\b(xox[baprs]-[0-9a-zA-Z-]{10,48})\b')),
+    ('private_key', re.compile(r'(-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)')),
+]
 PLACEHOLDERS = {'', 'changeme', 'change_me', 'your_password', 'password_here', 'example', 'redacted', 'null', 'none', 'undefined', 'true', 'false'}
+
+
+def shannon_entropy(text):
+    if not text:
+        return 0.0
+    counts = {}
+    for ch in text:
+        counts[ch] = counts.get(ch, 0) + 1
+    length = len(text)
+    return round(-sum((c / length) * math.log2(c / length) for c in counts.values()), 2)
 
 
 def real_value(value):
@@ -43,8 +61,8 @@ def prefix(name, pattern):
 
 
 def extract(text, suffix):
-    """Yield literal candidates only, without reading env vars or executing code."""
     records = []
+    seen_values = set()
     if suffix == '.json':
         def walk(value, pointer='$'):
             if isinstance(value, dict):
@@ -52,6 +70,7 @@ def extract(text, suffix):
                 for k, v in value.items():
                     if SECRET_KEY.search(k) and isinstance(v, str) and real_value(v):
                         records.append({'key': pointer + '.' + k, 'line': None, 'username': users.get(prefix(k, SECRET_KEY)), 'value': v, 'method': 'JSON literal and sibling username'})
+                        seen_values.add(v)
                     walk(v, pointer + '.' + k)
             elif isinstance(value, list):
                 for i, v in enumerate(value):
@@ -68,7 +87,6 @@ def extract(text, suffix):
             match = ASSIGNMENT.match(content)
             if match:
                 value = next(v for v in match.groups()[1:] if v is not None)
-                # Unquoted code expressions are not literal credentials.
                 if suffix in ('.py', '.js', '.ts') and match.group(4) is not None:
                     continue
                 assignments.append((match.group(1), value, line, section))
@@ -79,14 +97,28 @@ def extract(text, suffix):
                      if group == section and USER_KEY.search(key) and prefix(key, USER_KEY) == prefix(name, SECRET_KEY)]
             records.append({'key': section + name, 'line': line, 'username': min(users)[1] if users else None,
                             'value': value, 'method': 'literal assignment; nearest matching username key in same section'})
+            seen_values.add(value)
     for match in URL.finditer(text):
         parsed = urlsplit(match.group())
         if parsed.password and real_value(unquote(parsed.password)):
-            # Host and path identify the entry; the source URL itself is never reported.
+            val = unquote(parsed.password)
             records.append({'key': f'connection:{parsed.scheme}://{parsed.hostname}{parsed.path}',
                             'line': text.count('\n', 0, match.start()) + 1,
-                            'username': unquote(parsed.username or ''), 'value': unquote(parsed.password),
+                            'username': unquote(parsed.username or ''), 'value': val,
                             'method': 'database connection URL'})
+            seen_values.add(val)
+    for kind, pattern in TOKEN_SIGNATURES:
+        for match in pattern.finditer(text):
+            val = match.group(1)
+            if val in seen_values:
+                continue
+            line_no = text.count('\n', 0, match.start()) + 1
+            line_str = text.splitlines()[line_no - 1] if line_no <= len(text.splitlines()) else ''
+            if line_str.lstrip().startswith(('#', '//', ';')):
+                continue
+            records.append({'key': f'signature:{kind}', 'line': line_no, 'username': None,
+                            'value': val, 'method': f'token signature ({kind}, entropy={shannon_entropy(val)})'})
+            seen_values.add(val)
     return records
 
 
@@ -111,7 +143,7 @@ def audit_credentials(path, key_file, baseline=None, reveal=False):
                       'scope': root.name, 'scope_kind': 'file' if root.is_file() else 'directory'}
     if baseline:
         report['data']['baseline_scope_changed'] = (previous['data'].get('scope') != root.name or previous['data'].get('scope_kind') != report['data']['scope_kind'])
-    extensions = {'.json', '.yaml', '.yml', '.ini', '.toml', '.cfg', '.conf', '.properties', '.py', '.js', '.ts', '.env'}
+    extensions = {'.json', '.yaml', '.yml', '.ini', '.toml', '.cfg', '.conf', '.properties', '.py', '.js', '.ts', '.env', '.pem', '.key'}
     ignored = {'.git', '.venv', 'venv', 'node_modules', '__pycache__', 'reports', 'work', 'demo', 'dist', 'build'}
     paths = [root] if root.is_file() else []
     if root.is_dir():
@@ -151,11 +183,14 @@ def audit_credentials(path, key_file, baseline=None, reveal=False):
             item = {'identity': identity, 'file': asset, 'key': entry['key'], 'line': entry['line'],
                     'username': entry['username'], 'password_or_secret': entry['value'] if reveal else '[masked]',
                     'fingerprint': fingerprint, 'comparison': change, 'method': entry['method'],
+                    'entropy': shannon_entropy(entry['value']),
                     'username_changed': old is not None and old.get('username') != entry['username']}
             report['data']['credentials'].append(item)
             identities.add(identity)
-            report['findings'].append(finding('CRED001', 'Credential literal found in a local file',
-                f'{asset}:{entry["line"] or entry["key"]}', 'medium', 'medium', item,
+            rule = 'CRED002' if entry['key'].startswith('signature:') else 'CRED001'
+            severity = 'high' if rule == 'CRED002' else 'medium'
+            report['findings'].append(finding(rule, 'Credential or token literal found in a local file',
+                f'{asset}:{entry["line"] or entry["key"]}', severity, 'high' if rule == 'CRED002' else 'medium', item,
                 'Verify the associated account. If this value was exposed, rotate it at the service and update the application secret store. Remove the literal from source; file changes alone do not revoke an old credential.', status='potential'))
     report['data']['no_longer_observed'] = [
         {k: r.get(k) for k in ('identity', 'file', 'key', 'username', 'fingerprint')}

@@ -1,5 +1,3 @@
-//! High-performance IP classification and CIDR matching.
-
 use std::net::{IpAddr, Ipv4Addr};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,11 +27,7 @@ pub struct Ipv4Cidr {
 impl Ipv4Cidr {
     pub fn new(addr: Ipv4Addr, prefix: u8, intel: ProviderIntel) -> Self {
         assert!(prefix <= 32);
-        let mask = if prefix == 0 {
-            0
-        } else {
-            !0u32 << (32 - prefix)
-        };
+        let mask = if prefix == 0 { 0 } else { !0u32 << (32 - prefix) };
         let network = u32::from(addr) & mask;
         Self { network, mask, intel }
     }
@@ -51,9 +45,7 @@ pub struct RadixIntel {
 impl RadixIntel {
     pub fn new_builtin() -> Self {
         let mut entries = Vec::new();
-
-        // Cloudflare
-        let cf_intel = ProviderIntel {
+        let cf = ProviderIntel {
             provider: "Cloudflare",
             category: ProviderCategory::Cdn,
             asn_org: "Cloudflare, Inc.",
@@ -66,11 +58,10 @@ impl RadixIntel {
             (Ipv4Addr::new(172, 64, 0, 0), 13),
             (Ipv4Addr::new(198, 41, 128, 0), 17),
         ] {
-            entries.push(Ipv4Cidr::new(*ip, *prefix, cf_intel.clone()));
+            entries.push(Ipv4Cidr::new(*ip, *prefix, cf.clone()));
         }
 
-        // AWS
-        let aws_intel = ProviderIntel {
+        let aws = ProviderIntel {
             provider: "AWS",
             category: ProviderCategory::Cloud,
             asn_org: "Amazon.com, Inc.",
@@ -80,11 +71,10 @@ impl RadixIntel {
             (Ipv4Addr::new(52, 0, 0, 0), 11),
             (Ipv4Addr::new(54, 0, 0, 0), 8),
         ] {
-            entries.push(Ipv4Cidr::new(*ip, *prefix, aws_intel.clone()));
+            entries.push(Ipv4Cidr::new(*ip, *prefix, aws.clone()));
         }
 
-        // DigitalOcean
-        let do_intel = ProviderIntel {
+        let do_cloud = ProviderIntel {
             provider: "DigitalOcean",
             category: ProviderCategory::Cloud,
             asn_org: "DigitalOcean, LLC",
@@ -94,7 +84,7 @@ impl RadixIntel {
             (Ipv4Addr::new(138, 68, 0, 0), 16),
             (Ipv4Addr::new(159, 65, 0, 0), 16),
         ] {
-            entries.push(Ipv4Cidr::new(*ip, *prefix, do_intel.clone()));
+            entries.push(Ipv4Cidr::new(*ip, *prefix, do_cloud.clone()));
         }
 
         Self { entries }
@@ -159,11 +149,9 @@ mod tests {
         assert_eq!(res.category, ProviderCategory::Cdn);
 
         let private_ip: IpAddr = "192.168.1.1".parse().unwrap();
-        let res_priv = intel.classify(private_ip);
-        assert_eq!(res_priv.category, ProviderCategory::Private);
+        assert_eq!(intel.classify(private_ip).category, ProviderCategory::Private);
 
         let loopback: IpAddr = "127.0.0.1".parse().unwrap();
-        let res_loop = intel.classify(loopback);
-        assert_eq!(res_loop.category, ProviderCategory::Loopback);
+        assert_eq!(intel.classify(loopback).category, ProviderCategory::Loopback);
     }
 }

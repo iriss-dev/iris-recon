@@ -1,32 +1,27 @@
-"""Passive Certificate Transparency (crt.sh) reconnaissance and DNS attack surface mapping."""
+"""Passive Certificate Transparency (crt.sh) lookup and DNS resolution."""
 import asyncio
 import json
 import re
 import socket
 import urllib.request
-import urllib.error
-from typing import Dict, Any, List, Set
 
-from .model import assessment, finding
 from .intel import classify_ip
+from .model import assessment, finding
 
-SENSITIVE_SUBDOMAIN_PATTERNS = [
+PATTERNS = [
     (re.compile(r'^(dev|devel|development|staging|stage|stg|test|testing|qa|uat|sandbox|demo)\.', re.I),
-     'Exposed pre-production or staging environment', 'medium', 'SUB001',
-     'Pre-production environments often have weaker access controls, verbose debugging or mock credentials. Restrict public DNS or enforce IP allow-lists/VPN access.'),
+     'Pre-production or staging subdomain observed', 'medium', 'SUB001',
+     'Pre-production environments often have weaker access controls or debug settings. Restrict network reachability or require VPN/SSO.'),
     (re.compile(r'^(admin|adm|portal|manage|manager|cpanel|whm|webmail|vpn|remote|bastion|internal|corp|ldap|sso|auth|kibana|grafana|prometheus|jenkins|gitlab|git)\.', re.I),
-     'Exposed administrative or internal management service', 'high', 'SUB002',
-     'Administrative interfaces should not be publicly discoverable without mutual TLS, VPN, or zero-trust identity proxy protection.')
+     'Administrative or internal service subdomain observed', 'high', 'SUB002',
+     'Verify that administrative interfaces require strong authentication, MFA and network access restrictions.'),
 ]
 
 
-def query_crt_sh(domain: str, timeout: float = 12.0) -> List[str]:
-    """Query Certificate Transparency logs via crt.sh without external third-party libraries."""
-    clean_domain = domain.strip().lower().lstrip('.')
-    url = f"https://crt.sh/?q=%.{clean_domain}&output=json"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) INMAP/1.0.0 Recon'}
-
-    req = urllib.request.Request(url, headers=headers)
+def query_crt_sh(domain, timeout=12.0):
+    clean = domain.strip().lower().lstrip('.')
+    url = f'https://crt.sh/?q=%.{clean}&output=json'
+    req = urllib.request.Request(url, headers={'User-Agent': 'INMAP/1.0'})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status != 200:
@@ -34,10 +29,9 @@ def query_crt_sh(domain: str, timeout: float = 12.0) -> List[str]:
             raw = resp.read(8 * 1024 * 1024)
             data = json.loads(raw.decode('utf-8', errors='replace'))
     except Exception:
-        # Fallback if crt.sh is slow or rate-limited
         return []
 
-    subdomains: Set[str] = set()
+    subdomains = set()
     for entry in data:
         for key in ('name_value', 'common_name'):
             val = entry.get(key)
@@ -47,117 +41,69 @@ def query_crt_sh(domain: str, timeout: float = 12.0) -> List[str]:
                 item = item.strip().lower()
                 if item.startswith('*.'):
                     item = item[2:]
-                if item and (item == clean_domain or item.endswith('.' + clean_domain)):
+                if item and (item == clean or item.endswith('.' + clean)):
                     subdomains.add(item)
+    return sorted(subdomains)
 
-    return sorted(list(subdomains))
 
-
-async def resolve_subdomain(subdomain: str, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
-    """Resolve a subdomain to A and AAAA addresses using non-blocking getaddrinfo."""
+async def resolve_subdomain(subdomain, semaphore):
     loop = asyncio.get_running_loop()
     ips = set()
     async with semaphore:
         try:
-            addr_info = await loop.getaddrinfo(subdomain, None, proto=socket.IPPROTO_TCP)
-            for item in addr_info:
-                sockaddr = item[4]
-                ip_str = sockaddr[0]
-                ips.add(ip_str)
+            infos = await loop.getaddrinfo(subdomain, None, proto=socket.IPPROTO_TCP)
+            for item in infos:
+                ips.add(item[4][0])
         except Exception:
             pass
-
-    resolved_list = sorted(list(ips))
-    intel_records = [classify_ip(ip) for ip in resolved_list]
-
+    resolved_list = sorted(ips)
     return {
         'subdomain': subdomain,
         'resolved': bool(resolved_list),
         'ips': resolved_list,
-        'intel': intel_records
+        'intel': [classify_ip(ip) for ip in resolved_list],
     }
 
 
-def audit_subdomains(domain: str, known_subdomains: Optional[List[str]] = None, resolve_dns: bool = True) -> Dict[str, Any]:
-    """Run Certificate Transparency subdomain enumeration and DNS mapping."""
-    clean_domain = domain.strip().lower().lstrip('.')
-    if not clean_domain or '.' not in clean_domain:
-        raise ValueError(f"Invalid domain name: '{domain}'")
+def audit_subdomains(domain, known_subdomains=None, resolve_dns=True):
+    clean = domain.strip().lower().lstrip('.')
+    if not clean or '.' not in clean:
+        raise ValueError(f'Invalid domain name: {domain}')
 
-    if known_subdomains is None:
-        subdomain_list = query_crt_sh(clean_domain)
-    else:
-        subdomain_list = sorted(list(set(known_subdomains)))
+    subdomain_list = sorted(set(known_subdomains)) if known_subdomains is not None else query_crt_sh(clean)
+    if clean not in subdomain_list:
+        subdomain_list.append(clean)
 
-    # Ensure apex domain is included
-    if clean_domain not in subdomain_list:
-        subdomain_list.append(clean_domain)
-
-    subdomain_records = []
+    records = []
     if resolve_dns and subdomain_list:
         async def _resolve_all():
             sem = asyncio.Semaphore(50)
-            tasks = [resolve_subdomain(s, sem) for s in subdomain_list]
-            return await asyncio.gather(*tasks)
+            return await asyncio.gather(*(resolve_subdomain(s, sem) for s in subdomain_list))
 
         loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(loop)
-            subdomain_records = loop.run_until_complete(_resolve_all())
+            records = loop.run_until_complete(_resolve_all())
         finally:
             loop.close()
     else:
-        for s in subdomain_list:
-            subdomain_records.append({
-                'subdomain': s,
-                'resolved': False,
-                'ips': [],
-                'intel': []
-            })
+        records = [{'subdomain': s, 'resolved': False, 'ips': [], 'intel': []} for s in subdomain_list]
 
-    # Findings generation
     findings = []
-    for rec in subdomain_records:
+    for rec in records:
         sub = rec['subdomain']
         has_ips = rec['resolved']
-        ips = rec['ips']
-
-        # Check for sensitive prefixes
-        for pattern, title, severity, rule_code, remediation in SENSITIVE_SUBDOMAIN_PATTERNS:
+        for pattern, title, severity, rule_code, remediation in PATTERNS:
             if pattern.search(sub):
-                evidence = {
-                    'subdomain': sub,
-                    'resolved_ips': ips,
-                    'intel': rec['intel']
-                }
-                findings.append(finding(
-                    rule_code,
-                    title,
-                    sub,
-                    severity if has_ips else 'low',
-                    'high' if has_ips else 'medium',
-                    evidence,
-                    remediation
-                ))
+                findings.append(finding(rule_code, title, sub,
+                    severity if has_ips else 'low', 'high' if has_ips else 'medium',
+                    {'subdomain': sub, 'resolved_ips': rec['ips'], 'intel': rec['intel']},
+                    remediation))
 
-        # Check for dangling or unresolvable CT record if it had an apex
-        if not has_ips and sub != clean_domain and not resolve_dns:
-            pass
-
-    report = assessment(
-        kind='subdomains',
-        title=f"Attack Surface Reconnaissance ({clean_domain})",
-        findings=findings,
-        data={
-            'domain': clean_domain,
-            'total_subdomains_discovered': len(subdomain_list),
-            'resolved_active_subdomains': sum(1 for r in subdomain_records if r['resolved']),
-            'records': subdomain_records
-        },
+    return assessment('subdomains', f'Subdomain & DNS review ({clean})', findings=findings,
+        data={'domain': clean, 'total_subdomains_discovered': len(subdomain_list),
+              'resolved_active_subdomains': sum(1 for r in records if r['resolved']), 'records': records},
         limitations=[
-            'Passive Certificate Transparency reflects certificates issued historically; expired certs or decommissioned hosts may appear.',
-            'Wildcard DNS may resolve non-existent subdomains to a default IP; verify actual HTTP/service response.',
-            'Private or internal subdomains not requesting public TLS certs will not appear in crt.sh.'
-        ]
-    )
-    return report
+            'Certificate Transparency logs include historical and expired certificates.',
+            'Wildcard DNS records may resolve arbitrary subdomains to a default gateway IP.',
+            'Internal hosts without public certificates are not present in CT logs.'])
