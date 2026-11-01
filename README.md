@@ -1,6 +1,6 @@
 # INMAP
 
-[![Tests](https://github.com/iriss-dev/iris-recon/actions/workflows/ci.yml/badge.svg)](https://github.com/iriss-dev/iris-recon/actions/workflows/ci.yml)
+[![Tests](https://github.com/iriss-dev/INMAP/actions/workflows/ci.yml/badge.svg)](https://github.com/iriss-dev/INMAP/actions/workflows/ci.yml)
 
 Network, web, SQL, DNS, IaC and dependency assessment tools with local evidence reports.
 
@@ -11,8 +11,8 @@ INMAP (formerly `iris-recon`) includes an asynchronous TCP scanner, Nmap XML com
 Requires Python 3.11+. A virtual environment is recommended.
 
 ```console
-git clone https://github.com/iriss-dev/iris-recon.git
-cd iris-recon
+git clone https://github.com/iriss-dev/INMAP.git
+cd INMAP
 python -m pip install -e .
 inmap doctor
 ```
